@@ -213,7 +213,7 @@ class ChannelTracker {
 (async () => {
     // MODIFICATION: Launch browser in headless mode with args for server compatibility
     const browser = await chromium.launch({ 
-        headless: true, // Runs in the background, perfect for servers
+        headless: true, // MODIFIED: Use boolean 'true' instead of string "new"
         args: [
             '--disable-blink-Features=AutomationControlled',
             '--disable-service-workers',
@@ -408,11 +408,19 @@ class ChannelTracker {
     // --- Part 1: Log in and fetch token ---
     await page.goto('https://workers.onech.at');
     
-    // MODIFICATION: Automated login wait instead of manual "press ENTER"
-    console.log("⏳ Waiting for the page to load and for you to be logged in...");
+    // MODIFICATION: Wait for the main app to load before fetching the token
+    console.log("⏳ Waiting for the Revolt app to load...");
     console.log("   -> Use the public URL of this service to log in now!");
-    await page.waitForTimeout(5000); // Wait for 5 seconds
-    console.log("✅ Proceeding with token fetch from IndexedDB...");
+    console.log("   -> The bot will automatically proceed once the app is ready.");
+    try {
+        // Wait for a main element that only appears after a successful login
+        await page.waitForSelector('main', { timeout: 60000 }); // Wait up to 60 seconds
+        console.log("✅ App is ready. Proceeding with token fetch from IndexedDB...");
+    } catch (error) {
+        console.error("❌ Timed out waiting for the Revolt app to load. Did you log in?");
+        // Exit the process if the app never loads
+        process.exit(1);
+    }
 
     const authToken = await page.evaluate(() => {
         return new Promise((resolve, reject) => {
