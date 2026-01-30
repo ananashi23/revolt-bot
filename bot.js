@@ -213,7 +213,7 @@ class ChannelTracker {
 (async () => {
     // MODIFICATION: Launch browser in headless mode with args for server compatibility
     const browser = await chromium.launch({ 
-        headless: "new", // Runs in the background, perfect for servers
+        headless: true, // Runs in the background, perfect for servers
         args: [
             '--disable-blink-Features=AutomationControlled',
             '--disable-service-workers',
