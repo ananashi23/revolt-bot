@@ -413,16 +413,18 @@ class ChannelTracker {
             console.log('[Bot Script] Enhanced WebSocket proxy and systems are in place.');
         });
         
-// --- Part 1: Log in and fetch token ---
-await page.goto('https://workers.onech.at');
-
-// DIAGNOSTIC: Take a screenshot to see what the page looks like
-console.log("📸 DIAGNOSTIC: Taking a screenshot of the page...");
-await page.screenshot({ path: '/opt/render/project/src/page-load.png', fullPage: true });
-console.log("✅ DIAGNOSTIC: Screenshot saved. Check the 'Files' tab in Render.");
-
-// MODIFICATION: Wait for the main app to load before fetching the token
-console.log("⏳ Waiting for the Revolt app to load...");
+        // --- Part 1: Log in and fetch token ---
+        await page.goto('https://workers.onech.at');
+        
+        // DIAGNOSTIC: Log the page title and URL to see what we landed on
+        console.log("🔍 DIAGNOSTIC: Checking page state...");
+        const pageTitle = await page.title();
+        const pageUrl = page.url();
+        console.log(`🔍 DIAGNOSTIC: Page Title: "${pageTitle}"`);
+        console.log(`🔍 DIAGNOSTIC: Page URL: "${pageUrl}"`);
+        
+        // MODIFICATION: Wait for the main app to load before fetching the token
+        console.log("⏳ Waiting for the Revolt app to load...");
         console.log("   -> Use the public URL of this service to log in now!");
         console.log("   -> The bot will automatically proceed once the app is ready.");
         try {
