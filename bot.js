@@ -1,12 +1,9 @@
-// bot.js - FINAL AUTOMATED VERSION FOR RENDER
-// This version connects directly to the WebSocket API using a token.
+// bot.js - FINAL AUTOMATED LOGIN VERSION FOR RENDER
 import { chromium } from 'playwright';
 import { createServer } from 'http';
-import { WebSocket } from 'ws'; // We need the 'ws' library for direct WebSocket connection
 
 // --- Configuration ---
-const API_BASE_URL = "https://workers.api.onech.at";
-const WEBSOCKET_URL = "wss://ws.revolt.chat/"; // Revolt's WebSocket Gateway
+const API_BASE_URL = "https://workers.api.onech.at"; 
 
 const SERVER_NAMES = {
     "01K7A7CNSMC5XPTJ7J36H9XKGR": "Foodcity",
@@ -17,120 +14,483 @@ const SERVER_NAMES = {
     "01JDKAFHS1W2BTPSS9YDB6WNEP": "goonery",
     "01JZ61Q8WN45VQ0ZMCM59T10ZX": "Exclusive Orders"
 };
+
 const TARGET_SERVER_IDS = Object.keys(SERVER_NAMES);
 
 // Rate Limiting Configuration
-const RATE_LIMIT_CONFIG = { refillRate: 8, bucketSize: 15, tokenCost: 1, maxQueueSize: 100 };
+const RATE_LIMIT_CONFIG = {
+    refillRate: 8,        // 8 tokens per second (1 token every 125ms)
+    bucketSize: 15,       // Allow bursts of up to 15 messages
+    tokenCost: 1,         // 1 token per message
+    maxQueueSize: 100     // Maximum messages to queue
+};
+
 // Server-Specific Delay Configuration (in ms)
-const SERVER_DELAYS = { "VIP": { min: 200, max: 200 }, "goonery": { min: 180, max: 200 } };
+const SERVER_DELAYS = {
+    "VIP": { min: 200, max: 200 },      // Fixed 200ms delay for VIP
+    "goonery": { min: 180, max: 200 }   // 180-200ms delay for goonery
+    // Other servers have no delay (0ms)
+};
+
+// Memory Cleanup Configuration
+const CLEANUP_CONFIG = {
+    expirationTime: 24 * 60 * 60 * 1000,  // 24 hours in ms
+    cleanupInterval: 60 * 60 * 1000,      // 1 hour in ms
+    maxEntries: 100000                     // Maximum entries to track
+};
 
 // Helper function to generate a unique nonce
-function generateNonce() { return Date.now().toString(36) + Math.random().toString(36).substring(2); }
+function generateNonce() {
+    return Date.now().toString(36) + Math.random().toString(36).substring(2);
+}
 
-// Rate Limiter Class (same as before)
+// Rate Limiter Class using Token Bucket Algorithm
 class RateLimiter {
-    constructor(config) { /* ... (same implementation as before) ... */ }
-    async refillTokens() { /* ... */ }
-    async waitForToken() { /* ... */ }
-    async execute(task, priority = false) { /* ... */ }
-    async processQueue() { /* ... */ }
-    getStatus() { /* ... */ }
+    constructor(config) {
+        this.config = config;
+        this.tokens = config.bucketSize;
+        this.lastRefill = Date.now();
+        this.queue = [];
+        this.processing = false;
+    }
+
+    async refillTokens() {
+        const now = Date.now();
+        const timePassed = (now - this.lastRefill) / 1000;
+        const tokensToAdd = Math.floor(timePassed * this.config.refillRate);
+        
+        if (tokensToAdd > 0) {
+            this.tokens = Math.min(this.config.bucketSize, this.tokens + tokensToAdd);
+            this.lastRefill = now;
+        }
+    }
+
+    async waitForToken() {
+        await this.refillTokens();
+        
+        if (this.tokens >= this.config.tokenCost) {
+            this.tokens -= this.config.tokenCost;
+            return true;
+        }
+        
+        return false;
+    }
+
+    async execute(task, priority = false) {
+        return new Promise((resolve, reject) => {
+            if (this.queue.length >= this.config.maxQueueSize) {
+                reject(new Error('Rate limiter queue is full'));
+                return;
+            }
+
+            const item = { task, resolve, reject, priority, timestamp: Date.now() };
+            
+            if (priority) {
+                const firstNonPriority = this.queue.findIndex(item => !item.priority);
+                if (firstNonPriority === -1) {
+                    this.queue.push(item);
+                } else {
+                    this.queue.splice(firstNonPriority, 0, item);
+                }
+            } else {
+                this.queue.push(item);
+            }
+
+            this.processQueue();
+        });
+    }
+
+    async processQueue() {
+        if (this.processing || this.queue.length === 0) return;
+        
+        this.processing = true;
+
+        while (this.queue.length > 0) {
+            const hasToken = await this.waitForToken();
+            
+            if (hasToken) {
+                const item = this.queue.shift();
+                try {
+                    const result = await item.task();
+                    item.resolve(result);
+                } catch (error) {
+                    item.reject(error);
+                }
+            } else {
+                // Wait for tokens to refill
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+        
+        this.processing = false;
+    }
+}
+
+// Channel Tracker Class with Memory Management
+class ChannelTracker {
+    constructor(config) {
+        this.config = config;
+        this.processedChannels = new Map(); // channelId -> timestamp
+        this.cleanupTimer = null;
+        this.startCleanup();
+    }
+
+    add(channelId) {
+        // Remove oldest entries if we hit the limit
+        if (this.processedChannels.size >= this.config.maxEntries) {
+            const oldestKey = this.processedChannels.keys().next().value;
+            this.processedChannels.delete(oldestKey);
+        }
+        
+        this.processedChannels.set(channelId, Date.now());
+    }
+
+    has(channelId) {
+        return this.processedChannels.has(channelId);
+    }
+
+    cleanup() {
+        const now = Date.now();
+        const cutoffTime = now - this.config.expirationTime;
+        let removedCount = 0;
+        
+        for (const [channelId, timestamp] of this.processedChannels.entries()) {
+            if (timestamp < cutoffTime) {
+                this.processedChannels.delete(channelId);
+                removedCount++;
+            }
+        }
+        
+        console.log(`[ChannelTracker] Cleanup completed: removed ${removedCount} expired entries, ${this.processedChannels.size} remaining`);
+        
+        // Also enforce size limit
+        if (this.processedChannels.size > this.config.maxEntries) {
+            const entries = Array.from(this.processedChannels.entries());
+            entries.sort((a, b) => a[1] - b[1]); // Sort by timestamp (oldest first)
+            
+            const toRemove = entries.slice(0, this.processedChannels.size - this.config.maxEntries);
+            toRemove.forEach(([channelId]) => this.processedChannels.delete(channelId));
+            
+            console.log(`[ChannelTracker] Size limit enforced: removed ${toRemove.length} oldest entries`);
+        }
+    }
+
+    startCleanup() {
+        this.cleanupTimer = setInterval(() => {
+            this.cleanup();
+        }, this.config.cleanupInterval);
+    }
+
+    stopCleanup() {
+        if (this.cleanupTimer) {
+            clearInterval(this.cleanupTimer);
+            this.cleanupTimer = null;
+        }
+    }
 }
 
 // --- Main Bot Logic ---
 async function runBot() {
+    console.log("🚀 Starting background bot logic with automated login...");
     const authToken = process.env.REVOLT_AUTH_COOKIE;
     if (!authToken) {
         console.error("❌ FATAL ERROR: REVOLT_AUTH_COOKIE environment variable not set.");
         return;
     }
-    console.log("✅ Auth token found. Connecting to Revolt WebSocket Gateway...");
 
-    const ws = new WebSocket(WEBSOCKET_URL, [], {
-        headers: {
-            'Authorization': authToken
-        }
+    const browser = await chromium.launch({ 
+        headless: true,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        args: ['--disable-blink-Features=AutomationControlled', '--disable-service-workers', '--no-sandbox', '--disable-setuid-sandbox', '--lang=en-US,en;q=0.9', '--ignore-certificate-errors']
     });
+    const context = await browser.newContext({ viewport: { width: 1600, height: 900 }, locale: 'en-US' });
+    const page = await context.newPage();
+    page.on('console', msg => { if (msg.type() === 'log') { console.log(msg.text()); } });
 
-    const rateLimiter = new RateLimiter(RATE_LIMIT_CONFIG);
-    const processedChannels = new Set(); // Use a Set for faster lookups
+    // --- Part 0: Inject the bot logic ---
+    console.log("🧠 Injecting the enhanced bot logic...");
+    await context.addInitScript(() => {
+        // Helper function to get current local time as a formatted string
+        window.getLocalTime = () => {
+            const now = new Date();
+            return now.toLocaleString();
+        };
+        
+        console.log('[Bot Script] Enhanced logic injected. Initializing systems...');
+        
+        let isPaused = false;
 
-    ws.on('open', () => {
-        console.log("🎉 WebSocket connection established. Bot is now monitoring for tickets!");
-        // Authenticate the session
-        ws.send(JSON.stringify({ type: "Authenticate", token: authToken }));
-    });
+        // Function to pause/resume the bot
+        window.setPauseState = (paused) => {
+            isPaused = paused;
+            console.log(`[Bot Script] ${paused ? '⏸️ Bot PAUSED' : '▶️ Bot RESUMED'}`);
+        };
 
-    ws.on('message', (data) => {
-        try {
-            const event = JSON.parse(data.toString());
-            if (event.type === "Authenticated") {
-                console.log("✅ Successfully authenticated with Revolt.");
+        // This function now handles a single channel directly with rate limiting, server delays, and latency measurement
+        window.handleNewChannel = async (data) => {
+            const channelId = data._id;
+            const channelName = data.name;
+            const serverId = data.server;
+            const serverName = window.serverNames[serverId] || "Unknown";
+            
+            console.log(`[Bot Script] 🎯 New ticket detected: ${channelName} in ${serverName}`);
+
+            // Extract only the number from the channel name
+            const ticketNumberMatch = channelName.match(/\d+/);
+            const ticketNumber = ticketNumberMatch ? ticketNumberMatch[0] : channelName;
+            console.log(`[Bot Script] 🎫 Extracted Ticket Number: ${ticketNumber}`);
+
+            // Determine message content and priority
+            let messageContent = ticketNumber;
+            let isPriority = false;
+            let serverDelay = 0;
+            
+            if (serverName === "VIP" || serverName === "snackhack" || serverName === "goonery" || serverName === "Exclusive Orders") {
+                const suffixes = ["..2", "..3", "..4", "..5"];
+                const randomSuffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+                messageContent = randomSuffix;
+                isPriority = (serverName === "VIP" || serverName === "goonery"); // Priority for VIP and goonery
+                
+                // Apply server-specific delays for VIP and goonery
+                if (serverName === "VIP" && window.serverDelays.VIP) {
+                    serverDelay = window.serverDelays.VIP.min;
+                    console.log(`[Bot Script] ⏱️ VIP server detected, applying ${serverDelay}ms delay`);
+                } else if (serverName === "goonery" && window.serverDelays.goonery) {
+                    serverDelay = window.serverDelays.goonery.min + Math.random() * (window.serverDelays.goonery.max - window.serverDelays.goonery.min);
+                    console.log(`[Bot Script] ⏱️ goonery server detected, applying ${Math.round(serverDelay)}ms delay`);
+                }
+                
+                console.log(`[Bot Script] 🎲 ${serverName} server detected, sending suffix only: ${randomSuffix} (Priority: ${isPriority})`);
             }
-            if (event.type === "ChannelCreate" && TARGET_SERVER_IDS.includes(event.server)) {
-                const channelId = event._id;
-                if (processedChannels.has(channelId)) {
-                    console.log(`[Bot] Duplicate event for channel ${channelId}. Ignoring.`);
-                    return;
-                }
-                processedChannels.add(channelId);
 
-                const channelName = event.name;
-                const serverName = SERVER_NAMES[event.server] || "Unknown";
-                console.log(`[Bot] 🎯 New ticket detected: ${channelName} in ${serverName}`);
+            // Apply server-specific delay before proceeding
+            if (serverDelay > 0) {
+                await new Promise(resolve => setTimeout(resolve, serverDelay));
+            }
 
-                const ticketNumberMatch = channelName.match(/\d+/);
-                const ticketNumber = ticketNumberMatch ? ticketNumberMatch[0] : channelName;
+            const apiChannelUrl = `${window.apiBaseUrl}/channels/${channelId}/messages`;
+            
+            // Create the task to be executed by rate limiter with latency measurement
+            const sendMessageTask = async () => {
+                const startTime = performance.now();
+                
+                try {
+                    console.log(`[Bot Script] 🚀 Sending message via Fetch: ${messageContent}`);
+                    
+                    const fetchStartTime = performance.now();
+                    const response = await fetch(apiChannelUrl, {
+                        method: 'POST', 
+                        headers: { 
+                            'Content-Type': 'application/json', 
+                            'x-session-token': window.authToken 
+                        },
+                        body: JSON.stringify({ 
+                            content: messageContent, 
+                            nonce: window.generateNonce(), 
+                            replies: [] 
+                        })
+                    });
+                    const fetchEndTime = performance.now();
+                    const fetchTime = fetchEndTime - fetchStartTime;
+                    
+                    const networkTime = fetchTime; // This includes network + API processing
+                    const totalTime = performance.now() - startTime;
+                    
+                    console.log(`[Bot Script] 📡 API Response: ${response.status} ${response.statusText}`);
+                    console.log(`[Bot Script] ⏱️ Latency Metrics:`);
+                    console.log(`[Bot Script]   - Total time: ${totalTime.toFixed(2)}ms`);
+                    console.log(`[Bot Script]   - Network + API time: ${networkTime.toFixed(2)}ms`);
+                    console.log(`[Bot Script]   - Processing time: ${(totalTime - networkTime).toFixed(2)}ms`);
 
-                let messageContent = ticketNumber;
-                let isPriority = false;
-                let serverDelay = 0;
-
-                if (serverName === "VIP" || serverName === "snackhack" || serverName === "goonery" || serverName === "Exclusive Orders") {
-                    const suffixes = ["..2", "..3", "..4", "..5"];
-                    messageContent = suffixes[Math.floor(Math.random() * suffixes.length)];
-                    isPriority = (serverName === "VIP" || serverName === "goonery");
-                    if (serverName === "VIP") serverDelay = SERVER_DELAYS.VIP.min;
-                    else if (serverName === "goonery") serverDelay = SERVER_DELAYS.goonery.min + Math.random() * (SERVER_DELAYS.goonery.max - SERVER_DELAYS.goonery.min);
-                    console.log(`[Bot] 🎲 ${serverName} server detected, sending suffix: ${messageContent}`);
-                }
-
-                const sendMessageTask = async () => {
-                    const startTime = performance.now();
-                    try {
-                        const response = await fetch(`${API_BASE_URL}/channels/${channelId}/messages`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'x-session-token': authToken },
-                            body: JSON.stringify({ content: messageContent, nonce: generateNonce(), replies: [] })
-                        });
-                        const totalTime = performance.now() - startTime;
-                        console.log(`[Bot] 📡 API Response: ${response.status} | ⏱️ Total time: ${totalTime.toFixed(2)}ms`);
-                        if (!response.ok) {
-                            const errorText = await response.text();
-                            console.log(`[Bot] ❌ API Error: ${errorText}`);
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.log(`[Bot Script] ❌ API Error: ${errorText}`);
+                        throw new Error(`API Error: ${response.status} - ${errorText}`);
+                    } else {
+                        const responseData = await response.json();
+                        if (responseData._id) {
+                            console.log(`[Bot Script] ✅ Message sent successfully with ID: ${responseData._id}`);
+                        } else {
+                            console.log(`[Bot Script] ⚠️ Message sent but no ID returned`);
                         }
-                    } catch (error) {
-                        console.error(`[Bot] ❌ Error sending message: ${error.message}`);
+                        return responseData;
                     }
-                };
 
-                rateLimiter.execute(sendMessageTask, isPriority);
+                } catch (error) {
+                    console.error(`[Bot Script] ❌ Error sending message: ${error.message}`);
+                    throw error;
+                }
+            };
+
+            // Execute through rate limiter with priority if needed
+            try {
+                await window.rateLimiter.execute(sendMessageTask, isPriority);
+            } catch (error) {
+                console.error(`[Bot Script] ❌ Rate limiter error: ${error.message}`);
             }
-        } catch (e) {
-            console.error('[Bot] Error parsing WebSocket message:', e);
+        };
+
+        const OriginalWebSocket = window.WebSocket;
+        Object.defineProperty(window, 'WebSocket', {
+            get() {
+                return new Proxy(OriginalWebSocket, {
+                    construct(target, args) {
+                        const ws = new target(...args);
+                        ws.addEventListener('message', (event) => {
+                            try {
+                                const data = JSON.parse(event.data);
+                                if (data.type === "ChannelCreate" && window.targetServerIds.includes(data.server)) {
+                                    if (window.channelTracker.has(data._id)) {
+                                        console.log(`[Bot Script] Duplicate event for channel ${data._id}. Ignoring.`);
+                                        return;
+                                    }
+                                    if (isPaused) {
+                                        console.log(`[Bot Script] Bot is paused - ignoring new channel in ${window.serverNames[data.server] || "Unknown"}`);
+                                        return;
+                                    }
+                                    window.channelTracker.add(data._id);
+                                    const serverName = window.serverNames[data.server] || "Unknown";
+                                    console.log(`[Bot Script] New ticket event detected in ${serverName}! Processing...`);
+                                    
+                                    window.handleNewChannel(data);
+                                }
+                            } catch (e) { 
+                                console.error('[Bot Script] WebSocket message parsing error:', e);
+                            }
+                        });
+                        return ws;
+                    }
+                });
+            },
+            set() {
+                console.warn('[Bot Script] Attempt to overwrite window.WebSocket was blocked.');
+            }
+        });
+        console.log('[Bot Script] Enhanced WebSocket proxy and systems are in place.');
+    });
+    
+    // --- Part 1: Automate Login ---
+    console.log("🔐 Automating login by setting auth token in localStorage...");
+    await page.goto('https://workers.onech.at');
+    await page.evaluate((token) => {
+        localStorage.setItem('auth_token', token);
+    }, authToken);
+
+    // Refresh the page to let the app read the token from localStorage
+    await page.reload();
+    console.log("✅ Login should be complete. Waiting for the app to be ready...");
+
+    try {
+        // Wait for the main app to load, which should now be immediate
+        await page.waitForSelector('main', { timeout: 30000 });
+        console.log("✅ App is ready. Fetching session token from IndexedDB...");
+    } catch (error) {
+        console.error("❌ Timed out waiting for the app. Automated login may have failed.");
+        await browser.close();
+        return;
+    }
+
+    const sessionToken = await page.evaluate(() => {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('localforage');
+            request.onsuccess = () => {
+                const db = request.result;
+                const tx = db.transaction(['keyvaluepairs'], 'readonly');
+                const store = tx.objectStore('keyvaluepairs');
+                const getAllRequest = store.getAll();
+                getAllRequest.onsuccess = () => {
+                    const allValues = getAllRequest.result;
+                    let foundToken = null;
+                    for (const value of allValues) {
+                        if (value && value.sessions) {
+                            const sessionsObject = value.sessions;
+                            const userIdKey = Object.keys(sessionsObject)[0];
+                            if (userIdKey && sessionsObject[userIdKey] && sessionsObject[userIdKey].session) {
+                                foundToken = sessionsObject[userIdKey].session.token;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundToken) { resolve(foundToken); } else { reject(new Error('Session token not found after login.')); }
+                };
+                getAllRequest.onerror = () => reject(getAllRequest.error);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    });
+
+    if (!sessionToken) { console.error("❌ Could not find session token."); await browser.close(); return; }
+    console.log("✅ Session token fetched. Arming bot...");
+
+    // --- Part 2: "Arm" the bot with enhanced systems ---
+    console.log("🔐 Arming the bot with enhanced systems, server delays, and latency measurement...");
+    
+    // Initialize rate limiter, channel tracker, and latency tracker in the browser context
+    await page.evaluate(({ 
+        token, 
+        targetServerIds, 
+        serverNames, 
+        apiBaseUrl, 
+        rateLimitConfig, 
+        cleanupConfig,
+        serverDelays
+    }) => {
+        // Initialize Rate Limiter
+        window.rateLimiter = new RateLimiter(rateLimitConfig);
+
+        // Initialize Channel Tracker
+        window.channelTracker = new ChannelTracker(cleanupConfig);
+        
+        // Set global variables
+        window.authToken = token;
+        window.targetServerIds = targetServerIds;
+        window.serverNames = serverNames;
+        window.apiBaseUrl = apiBaseUrl;
+        window.serverDelays = serverDelays; // Add server delays configuration
+        window.generateNonce = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
+        
+        console.log('[Bot Script] Enhanced bot is ARMED and ready.');
+        console.log('[Bot Script] Rate Limiting:', rateLimitConfig.refillRate + ' msg/sec with burst of ' + rateLimitConfig.bucketSize);
+        console.log('[Bot Script] Server Delays:');
+        for (const [server, delay] of Object.entries(serverDelays)) {
+            if (delay.min === delay.max) {
+                console.log(`[Bot Script] - ${server}: ${delay.min}ms (fixed)`);
+            } else {
+                console.log(`[Bot Script] - ${server}: ${delay.min}-${delay.max}ms (range)`);
+            }
         }
+        console.log('[Bot Script] Memory Cleanup: every ' + (cleanupConfig.cleanupInterval/60000) + ' minutes, keeping ' + (cleanupConfig.expirationTime/3600000) + 'h of data');
+        
+        // Log server monitoring
+        console.log('[Bot Script] Monitoring servers:');
+        for (const [serverId, serverName] of Object.entries(serverNames)) {
+            console.log(`[Bot Script] - ${serverName} (${serverId})`);
+        }
+        
+        console.log('[Bot Script] Special behavior:');
+        console.log('[Bot Script] - VIP: Priority processing with ' + serverDelays.VIP.min + 'ms fixed delay + random suffix only (..2-..5)');
+        console.log('[Bot Script] - goonery: Priority processing with ' + serverDelays.goonery.min + '-' + serverDelays.goonery.max + 'ms delay + random suffix only (..2-..5)');
+        console.log('[Bot Script] - snackhack/Exclusive Orders: Random suffix only (..2-..5) with no delay');
+        console.log('[Bot Script] - Others: Ticket number with no delay');
+        
+    }, { 
+        token: sessionToken, 
+        targetServerIds: TARGET_SERVER_IDS, 
+        serverNames: SERVER_NAMES, 
+        apiBaseUrl: API_BASE_URL,
+        rateLimitConfig: RATE_LIMIT_CONFIG,
+        cleanupConfig: CLEANUP_CONFIG,
+        serverDelays: SERVER_DELAYS
     });
 
-    ws.on('error', (error) => {
-        console.error('🔥 WebSocket Error:', error);
-    });
-
-    ws.on('close', (code, reason) => {
-        console.log(`🔌 WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
-        // Optional: Add logic to reconnect here if needed
-    });
+    console.log("🚀 Enhanced bot is now running with server-specific delays and latency measurement!");
+    console.log("   - Rate Limited: 8 msg/sec sustained, 15 message bursts");
+    console.log("   - Memory Managed: Automatic cleanup every hour");
+    console.log("   - VIP: 200ms fixed delay + priority processing + random suffix");
+    console.log("   - goonery: 180-200ms delay + priority processing + random suffix");
+    console.log("   - Other servers: No delay, immediate processing");
+    console.log("   - Latency Measurement: Tracking network and API response times");
 }
-
 
 // --- Start the Dummy Server and Run the Bot ---
 const port = process.env.PORT || 3000;
@@ -141,5 +501,7 @@ const server = createServer((req, res) => {
 
 server.listen(port, () => {
     console.log(`🌐 Dummy server listening on port ${port} to satisfy Render.`);
-    runBot();
+    runBot().catch(error => {
+        console.error("🔥 Bot crashed:", error);
+    });
 });
