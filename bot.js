@@ -213,21 +213,24 @@ class ChannelTracker {
 (async () => {
     console.log("🔧 DIAGNOSTIC: About to launch browser...");
     try {
-        // MODIFICATION: Launch browser with a timeout to prevent hanging
-        const browser = await Promise.race([
-            chromium.launch({ 
-                headless: true,
-                args: [
-                    '--disable-blink-Features=AutomationControlled',
-                    '--disable-service-workers',
-                    '--no-sandbox', 
-                    '--disable-setuid-sandbox'
-                ]
-            }),
-            new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Browser launch timed out after 30 seconds')), 30000)
-            )
-        ]);
+// MODIFICATION: Launch browser with a realistic user-agent to bypass bot detection
+const browser = await Promise.race([
+    chromium.launch({ 
+        headless: true,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        args: [
+            '--disable-blink-Features=AutomationControlled',
+            '--disable-service-workers',
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--lang=en-US,en;q=0.9',
+            '--ignore-certificate-errors'
+        ]
+    }),
+    new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Browser launch timed out after 30 seconds')), 30000)
+    )
+]);
         console.log("✅ DIAGNOSTIC: Browser launched successfully.");
 
         const context = await browser.newContext({
