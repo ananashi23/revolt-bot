@@ -1,0 +1,562 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Revolt Bot GUI</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-running {
+            background-color: #2ecc71;
+        }
+        .status-paused {
+            background-color: #f39c12;
+        }
+        .status-stopped {
+            background-color: #e74c3c;
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .card {
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            padding: 20px;
+        }
+        .card:last-child {
+            grid-column: 1 / -1; 
+        }
+
+        /* --- NEW: Styles for the log card header --- */
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .card-header h2 {
+            margin: 0;
+            font-size: 18px;
+            color: #2c3e50;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            flex-grow: 1;
+        }
+        .log-font-controls {
+            display: flex;
+            gap: 5px;
+        }
+        .log-font-controls button {
+            background-color: #ecf0f1;
+            color: #2c3e50;
+            border: 1px solid #bdc3c7;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            transition: background-color 0.2s, color 0.2s;
+        }
+        .log-font-controls button:hover {
+            background-color: #3498db;
+            color: white;
+            border-color: #3498db;
+        }
+        /* --- END NEW STYLES --- */
+
+        .card h2 {
+            margin-top: 0;
+            font-size: 18px;
+            color: #2c3e50;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        button.danger {
+            background-color: #e74c3c;
+        }
+        button.danger:hover {
+            background-color: #c0392b;
+        }
+        button.success {
+            background-color: #2ecc71;
+        }
+        button.success:hover {
+            background-color: #27ae60;
+        }
+        button.warning {
+            background-color: #f39c12;
+        }
+        button.warning:hover {
+            background-color: #e67e22;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+        }
+        .stat {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+        }
+        .servers {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+        .server {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+        }
+        .server-name {
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        .server-id {
+            font-family: monospace;
+            font-size: 12px;
+            color: #7f8c8d;
+        }
+        .logs {
+            height: 500px;
+            overflow-y: auto;
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            /* Font size will now be controlled by JavaScript */
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            display: flex;
+        }
+        .log-time {
+            color: #95a5a6;
+            margin-right: 10px;
+            white-space: nowrap;
+        }
+        .log-level {
+            margin-right: 10px;
+            white-space: nowrap;
+            font-weight: bold;
+        }
+        .log-level-INFO {
+            color: #3498db;
+        }
+        .log-level-ERROR {
+            color: #e74c3c;
+        }
+        .log-level-BROWSER {
+            color: #2ecc71;
+        }
+        .log-message {
+            flex: 1;
+        }
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: #2c3e50;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            max-width: 300px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: transform 0.3s, opacity 0.3s;
+        }
+        .notification.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Revolt Bot Control Panel</h1>
+            <div class="status">
+                <div class="status-indicator" id="statusIndicator"></div>
+                <span id="statusText">Stopped</span>
+            </div>
+        </header>
+
+        <div class="dashboard">
+            <div class="card">
+                <h2>Bot Controls</h2>
+                <div class="controls">
+                    <button id="startBtn" class="success">Start Bot</button>
+                    <button id="stopBtn" class="danger" disabled>Stop Bot</button>
+                    <button id="armBtn" disabled>Arm Bot</button>
+                    <button id="pauseBtn" class="warning" disabled>Pause</button>
+                    <button id="resumeBtn" class="success" disabled>Resume</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Statistics</h2>
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value" id="channelsProcessed">0</div>
+                        <div class="stat-label">Channels Processed</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="messagesSent">0</div>
+                        <div class="stat-label">Messages Sent</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value" id="errors">0</div>
+                        <div class="stat-label">Errors</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Monitored Servers</h2>
+                <div class="servers" id="serversList">
+                    <!-- Servers will be populated here -->
+                </div>
+            </div>
+
+            <div class="card">
+                <!-- --- NEW: Log card header with font controls --- -->
+                <div class="card-header">
+                    <h2>Logs</h2>
+                    <div class="log-font-controls">
+                        <button id="decreaseFontBtn" title="Decrease Font Size">A-</button>
+                        <button id="increaseFontBtn" title="Increase Font Size">A+</button>
+                    </div>
+                </div>
+                <!-- --- END NEW SECTION --- -->
+                <div class="logs" id="logsContainer">
+                    <!-- Logs will be populated here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="notification" id="notification"></div>
+
+    <script>
+        const socket = io();
+        
+        // Elements
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const armBtn = document.getElementById('armBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resumeBtn = document.getElementById('resumeBtn');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+        const channelsProcessedEl = document.getElementById('channelsProcessed');
+        const messagesSentEl = document.getElementById('messagesSent');
+        const errorsEl = document.getElementById('errors');
+        const serversList = document.getElementById('serversList');
+        const logsContainer = document.getElementById('logsContainer');
+        const notification = document.getElementById('notification');
+        
+        // --- NEW: Elements for font size controls ---
+        const decreaseFontBtn = document.getElementById('decreaseFontBtn');
+        const increaseFontBtn = document.getElementById('increaseFontBtn');
+        
+        // State
+        let state = {
+            isRunning: false,
+            isPaused: false,
+            isArmed: false,
+            stats: {
+                channelsProcessed: 0,
+                messagesSent: 0,
+                errors: 0
+            },
+            servers: {},
+            logs: []
+        };
+
+        // --- NEW: State and function for log font size ---
+        let logFontSize = parseInt(localStorage.getItem('logFontSize')) || 16; // Default to 16px, load from localStorage
+
+        function updateLogFontSize() {
+            logsContainer.style.fontSize = logFontSize + 'px';
+            // Save to localStorage to persist across page refreshes
+            localStorage.setItem('logFontSize', logFontSize);
+        }
+        // --- END NEW SECTION ---
+        
+        // Update UI based on state
+        function updateUI() {
+            // Update status
+            if (state.isRunning) {
+                if (state.isPaused) {
+                    statusIndicator.className = 'status-indicator status-paused';
+                    statusText.textContent = 'Paused';
+                } else {
+                    statusIndicator.className = 'status-indicator status-running';
+                    statusText.textContent = 'Running';
+                }
+            } else {
+                statusIndicator.className = 'status-indicator status-stopped';
+                statusText.textContent = 'Stopped';
+            }
+            
+            // Update buttons
+            startBtn.disabled = state.isRunning;
+            stopBtn.disabled = !state.isRunning;
+            armBtn.disabled = !state.isRunning || state.isArmed;
+            pauseBtn.disabled = !state.isRunning || !state.isArmed || state.isPaused;
+            resumeBtn.disabled = !state.isRunning || !state.isArmed || !state.isPaused;
+            
+            // Update stats
+            channelsProcessedEl.textContent = state.stats.channelsProcessed;
+            messagesSentEl.textContent = state.stats.messagesSent;
+            errorsEl.textContent = state.stats.errors;
+            
+            // Update servers
+            serversList.innerHTML = '';
+            for (const [id, name] of Object.entries(state.servers)) {
+                const serverEl = document.createElement('div');
+                serverEl.className = 'server';
+                serverEl.innerHTML = `
+                    <div class="server-name">${name}</div>
+                    <div class="server-id">${id}</div>
+                `;
+                serversList.appendChild(serverEl);
+            }
+        }
+        
+        // Show notification
+        function showNotification(message, duration = 3000) {
+            notification.textContent = message;
+            notification.classList.add('show');
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, duration);
+        }
+        
+        // Add log entry
+        function addLog(log) {
+            state.logs.push(log);
+            
+            // Keep only the last 100 logs
+            if (state.logs.length > 100) {
+                state.logs.shift();
+            }
+            
+            // Add to UI
+            const logEl = document.createElement('div');
+            logEl.className = 'log-entry';
+            logEl.innerHTML = `
+                <div class="log-time">${log.timestamp}</div>
+                <div class="log-level log-level-${log.level}">${log.level}</div>
+                <div class="log-message">${log.message}</div>
+            `;
+            logsContainer.appendChild(logEl);
+            
+            // Auto-scroll to bottom
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+        
+        // Event listeners for buttons
+        startBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/start', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Bot started successfully');
+                } else {
+                    showNotification(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                showNotification(`Error: ${error.message}`);
+            }
+        });
+        
+        stopBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/stop', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Bot stopped successfully');
+                } else {
+                    showNotification(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                showNotification(`Error: ${error.message}`);
+            }
+        });
+        
+        armBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/arm', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Bot armed successfully');
+                } else {
+                    showNotification(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                showNotification(`Error: ${error.message}`);
+            }
+        });
+        
+        pauseBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/pause', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Bot paused');
+                } else {
+                    showNotification(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                showNotification(`Error: ${error.message}`);
+            }
+        });
+        
+        resumeBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/resume', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification('Bot resumed');
+                } else {
+                    showNotification(`Error: ${data.error}`);
+                }
+            } catch (error) {
+                showNotification(`Error: ${error.message}`);
+            }
+        });
+
+        // --- NEW: Event listeners for font size buttons ---
+        decreaseFontBtn.addEventListener('click', () => {
+            if (logFontSize > 10) { // Set a minimum font size
+                logFontSize -= 2;
+                updateLogFontSize();
+            }
+        });
+
+        increaseFontBtn.addEventListener('click', () => {
+            if (logFontSize < 30) { // Set a maximum font size
+                logFontSize += 2;
+                updateLogFontSize();
+            }
+        });
+        // --- END NEW SECTION ---
+        
+        // Socket event listeners
+        socket.on('state', (newState) => {
+            state = { ...state, ...newState };
+            updateUI();
+            
+            // Populate logs if they're included in the state update
+            if (newState.logs) {
+                logsContainer.innerHTML = '';
+                newState.logs.forEach(log => addLog(log));
+            }
+        });
+        
+        socket.on('log', (log) => {
+            addLog(log);
+        });
+        
+        // Initial status fetch
+        fetch('/api/status')
+            .then(response => response.json())
+            .then(data => {
+                state = { ...state, ...data };
+                updateUI();
+            })
+            .catch(error => {
+                console.error('Error fetching status:', error);
+            });
+
+        // --- NEW: Initialize font size on page load ---
+        updateLogFontSize();
+        // --- END NEW SECTION ---
+    </script>
+</body>
+</html>

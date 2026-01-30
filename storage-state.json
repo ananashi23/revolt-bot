@@ -1,0 +1,17 @@
+{
+  "cookies": [
+    {
+      "name": "cf_clearance",
+      "value": "_BoaoRWef.UCB2akATRnvvYaUftDGTl7EcFFtzAeYZU-1763181114-1.2.1.1-_LYX_YAM66EpdYS72wg6.6z0ZPH4T0JpKC0TINKRS71Y9_PX4qQmveDZFJ7btTVj49tFWOknse8HMy8pn5gToHLf03TMQp6tItqUSvfcTGY6.rk_DkdhL1ii6k3fj.ic1IE1wPdIPwaUorcCWWdv4BdqFy1wVeig3UzEzu5Y9snHJkR3tHsZ1uGsRZotUi_QN4Gd4KQfChLP9fdY7.LMARjv0jMp2puWDdgJUoj8Xtc",
+      "domain": ".onech.at",
+      "path": "/",
+      "expires": 1794717114.293431,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://onech.at",
+      "_crHasCrossSiteAncestor": false
+    }
+  ],
+  "origins": []
+}

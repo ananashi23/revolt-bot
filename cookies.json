@@ -1,0 +1,18 @@
+[
+  {
+    "name": "cf_clearance",
+    "value": "9xkqJn34849Q2ov8sy6Y0LYvpSjkS1h5_MXeG8vv4fE-1763095036-1.2.1.1-06Ay10gl.Tr8snkxMv3O6yY9m6LwbwzvBteT8L9FgvBxTMNzTatfE4QwL693UwN_wMDtXmS7FbVdnA0UhDT9yQUmpjKZVzg0Ld5zcb5452A.KD76wM3lopPEP8NHz0WdlpRaTQVr.MR.bnNJ0evQaGkrGVxNyPb3DVEa5euwuu1tRhC7P9.HlvmBbsRnbCbhPOFnPI2HfLMsRJbtjw7cJBpt6y8WiqQOYjmwghTxKp0",
+    "domain": ".onech.at",
+    "path": "/",
+    "expires": 1794631037.060298,
+    "size": 310,
+    "httpOnly": true,
+    "secure": true,
+    "session": false,
+    "sameSite": "None",
+    "priority": "Medium",
+    "sameParty": false,
+    "sourceScheme": "Secure",
+    "partitionKey": "https://onech.at"
+  }
+]

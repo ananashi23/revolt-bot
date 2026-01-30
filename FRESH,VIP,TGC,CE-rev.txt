@@ -1,0 +1,251 @@
+// bot.js - The "Final Race Winner" Version (With De-Duplication for New Servers)
+import { chromium } from 'playwright';
+
+// --- Configuration ---
+const SERVER_NAMES = {
+    "01K0BN10KK2MQ240QS667NVPDD": "FreshClub",
+    "01JDPY161J6H6B1KBV74QWKCDM": "VIP",
+    "01K7A7TBZ4SJKNXX47H9MHF6V7": "TGC",
+    "01JDKH82R0RHG2VF9YDWKEFHC5": "CE"
+};
+
+const TARGET_SERVER_IDS = Object.keys(SERVER_NAMES);
+
+console.log("--- Starting Revolt Bot (The 'Final Race Winner' Version with Multiple Server Behaviors) ---");
+
+// Helper function to generate a unique nonce
+function generateNonce() {
+    return Date.now().toString(36) + Math.random().toString(36).substring(2);
+}
+
+(async () => {
+    const browser = await chromium.launch({ 
+        headless: false,
+        args: [
+            '--disable-blink-features=AutomationControlled',
+            '--disable-service-workers'
+        ]
+    });
+
+    const context = await browser.newContext({
+        viewport: { width: 1600, height: 900 },
+        locale: 'en-US'
+    });
+
+    const page = await context.newPage();
+    
+    // Forward browser console logs to the Node.js terminal
+    page.on('console', msg => {
+        if (msg.type() === 'log') {
+            console.log(msg.text());
+        }
+    });
+    console.log("🔊 Listening for browser console messages...");
+
+    // --- Part 0: Inject the DE-DUPLICATING bot logic ---
+    console.log("🧠 Injecting the de-duplicating bot logic...");
+    await context.addInitScript(() => {
+        console.log('[Bot Script] Logic injected. Initializing queue and de-duplicator...');
+        
+        // --- THE NEW DE-DUPLICATION SYSTEM ---
+        window.processedChannelIds = new Set(); // Use a Set for fast lookups
+        window.channelQueue = [];
+        let isProcessing = false;
+
+        window.processQueue = async () => {
+            if (isProcessing || window.channelQueue.length === 0) {
+                return;
+            }
+
+            isProcessing = true;
+            const data = window.channelQueue.shift(); 
+            console.log(`[Bot Script] Processing from queue. ${window.channelQueue.length} items remaining.`);
+
+            const channelId = data._id;
+            const channelName = data.name;
+            const serverId = data.server;
+            const serverName = window.serverNames[serverId] || "Unknown";
+            
+            console.log(`[Bot Script] 🎯 Channel: ${channelName}, Server: ${serverName} (${serverId})`);
+
+            const apiChannelUrl = `https://revolt-api.onech.at/channels/${channelId}/messages`;
+            
+            try {
+                // Check which server this channel belongs to and send appropriate messages
+                if (serverId === "01JDKH82R0RHG2VF9YDWKEFHC5") {
+                    // CE server: send /claim then /claim .3
+                    const payload1 = { content: '/claim', nonce: window.generateNonce(), replies: [] };
+                    console.log(`[Bot Script] 🚀 Sending via Fetch: ${JSON.stringify(payload1)}`);
+                    
+                    const response1 = await fetch(apiChannelUrl, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-session-token': window.authToken },
+                        body: JSON.stringify(payload1)
+                    });
+                    
+                    console.log(`[Bot Script] 📡 API Response 1 Status: ${response1.status} ${response1.statusText}`);
+                    if (!response1.ok) {
+                        const errorText = await response1.text();
+                        console.log(`[Bot Script] ❌ API Error Response 1: ${errorText}`);
+                    }
+
+                    // Small delay between messages
+                    await new Promise(resolve => setTimeout(resolve, 100));
+
+                    const payload2 = { content: '/claim .3', nonce: window.generateNonce(), replies: [] };
+                    console.log(`[Bot Script] 🚀 Sending via Fetch: ${JSON.stringify(payload2)}`);
+                    
+                    const response2 = await fetch(apiChannelUrl, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-session-token': window.authToken },
+                        body: JSON.stringify(payload2)
+                    });
+                    
+                    console.log(`[Bot Script] 📡 API Response 2 Status: ${response2.status} ${response2.statusText}`);
+                    if (!response2.ok) {
+                        const errorText = await response2.text();
+                        console.log(`[Bot Script] ❌ API Error Response 2: ${errorText}`);
+                    }
+                    
+                    if (response1.ok && response2.ok) {
+                        console.log(`[Bot Script] ✅ Successfully sent both claim messages to ${serverName}.`);
+                    } else {
+                        console.log(`[Bot Script] ⚠️ One or more messages may not have been sent to ${serverName}.`);
+                    }
+                } else {
+                    // For all other servers, send .3
+                    const payload = { content: '.3', nonce: window.generateNonce(), replies: [] };
+                    console.log(`[Bot Script] 🚀 Sending via Fetch: ${JSON.stringify(payload)}`);
+                    
+                    const response = await fetch(apiChannelUrl, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-session-token': window.authToken },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    console.log(`[Bot Script] 📡 API Response Status: ${response.status} ${response.statusText}`);
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.log(`[Bot Script] ❌ API Error Response: ${errorText}`);
+                    }
+                    
+                    if (response.ok) {
+                        console.log(`[Bot Script] ✅ Successfully sent .3 command to ${serverName}.`);
+                    } else {
+                        console.log(`[Bot Script] ⚠️ Message may not have been sent to ${serverName}.`);
+                    }
+                }
+
+            } catch (error) {
+                console.error(`[Bot Script] ❌ An error occurred during fetch: ${error.message}`);
+            } finally {
+                setTimeout(() => {
+                    isProcessing = false;
+                    window.processQueue();
+                }, 50);
+            }
+        };
+
+        const OriginalWebSocket = window.WebSocket;
+        Object.defineProperty(window, 'WebSocket', {
+            get() {
+                return new Proxy(OriginalWebSocket, {
+                    construct(target, args) {
+                        const ws = new target(...args);
+                        ws.addEventListener('message', (event) => {
+                            if (isProcessing) return;
+                            try {
+                                const data = JSON.parse(event.data);
+                                if (data.type === "ChannelCreate" && window.targetServerIds.includes(data.server)) {
+                                    // --- THE DE-DUPLICATION CHECK ---
+                                    if (window.processedChannelIds.has(data._id)) {
+                                        console.log(`[Bot Script] Duplicate event for channel ${data._id}. Ignoring.`);
+                                        return;
+                                    }
+
+                                    // Mark this channel ID as processed
+                                    window.processedChannelIds.add(data._id);
+                                    const serverName = window.serverNames[data.server] || "Unknown";
+                                    console.log(`[Bot Script] New event detected in ${serverName}! Adding to queue...`);
+                                    window.channelQueue.push(data);
+                                    window.processQueue();
+                                }
+                            } catch (e) { /* Ignore parsing errors */ }
+                        });
+                        return ws;
+                    }
+                });
+            },
+            set() {
+                console.warn('[Bot Script] Attempt to overwrite window.WebSocket was blocked.');
+            }
+        });
+        console.log('[Bot Script] WebSocket proxy and de-duplicator are in place.');
+    });
+    
+    // --- Part 1: Log in and fetch token ---
+    await page.goto('https://revolt.onech.at');
+    
+    console.log("Please log in to your account now.");
+    console.log("Once you are successfully logged in and can see the app, press ENTER in this terminal to ACTIVATE the bot.");
+    
+    await new Promise(resolve => process.stdin.once('data', resolve));
+    
+    console.log("✅ Login confirmed. Fetching authentication token from IndexedDB...");
+
+    const authToken = await page.evaluate(() => {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('localforage');
+            request.onsuccess = () => {
+                const db = request.result;
+                const tx = db.transaction(['keyvaluepairs'], 'readonly');
+                const store = tx.objectStore('keyvaluepairs');
+                const getAllRequest = store.getAll();
+                getAllRequest.onsuccess = () => {
+                    const allValues = getAllRequest.result;
+                    let foundToken = null;
+                    for (const value of allValues) {
+                        if (value && value.sessions) {
+                            const sessionsObject = value.sessions;
+                            const userIdKey = Object.keys(sessionsObject)[0];
+                            if (userIdKey && sessionsObject[userIdKey] && sessionsObject[userIdKey].session) {
+                                foundToken = sessionsObject[userIdKey].session.token;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundToken) {
+                        resolve(foundToken);
+                    } else {
+                        reject(new Error('Could not find session token within any of the values in IndexedDB.'));
+                    }
+                };
+                getAllRequest.onerror = () => reject(getAllRequest.error);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    });
+
+    if (authToken) {
+        console.log(`✅ Successfully fetched token!`);
+    } else {
+        console.error("❌ Could not find token. The bot will not work.");
+        return;
+    }
+
+    // --- Part 2: "Arm" the bot ---
+    console.log("🔐 Arming the bot with token, server IDs, and helper function...");
+    await page.evaluate(({ token, targetServerIds, serverNames }) => {
+        window.authToken = token;
+        window.targetServerIds = targetServerIds;
+        window.serverNames = serverNames;
+        window.generateNonce = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
+        console.log('[Bot Script] Bot is ARMED and ready. De-duplicating listener is active.');
+        console.log('[Bot Script] Monitoring servers:');
+        for (const [serverId, serverName] of Object.entries(serverNames)) {
+            console.log(`[Bot Script] - ${serverName} (${serverId})`);
+        }
+    }, { token: authToken, targetServerIds: TARGET_SERVER_IDS, serverNames: SERVER_NAMES });
+
+    console.log("🚀 Bot is now running with DE-DUPLICATION enabled for multiple server behaviors. Good luck!");
+    
+    // Keep the script running
+    process.stdin.resume();
+})();

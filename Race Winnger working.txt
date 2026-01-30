@@ -1,0 +1,169 @@
+// bot.js - The "Race Winner" Script with Logging Fix
+import { chromium } from 'playwright';
+
+// --- Configuration ---
+const TARGET_SERVER_ID = "01JDKZ9Y7AEPQQDA7BVQA10DZ7";
+
+console.log("--- Starting Revolt Bot (The Race Winner Script + Logging) ---");
+
+(async () => {
+    // --- Part 1: Launch browser and context (same as before) ---
+    const browser = await chromium.launch({ 
+        headless: false,
+        args: ['--disable-blink-features=AutomationControlled']
+    });
+
+    const context = await browser.newContext({
+        viewport: { width: 1920, height: 1080 },
+        locale: 'en-US'
+    });
+
+    const page = await context.newPage();
+    
+    // --- LOGGING FIX: Forward browser console logs to the terminal ---
+    page.on('console', msg => {
+        if (msg.type() === 'log') {
+            console.log(`[BROWSER] ${msg.text()}`);
+        } else if (msg.type() === 'error') {
+            console.error(`[BROWSER ERROR] ${msg.text()}`);
+        }
+        // You can add other types like 'warning' if needed
+    });
+
+    // --- Part 2: Inject a "dumb" WebSocket listener first ---
+    // This listener will be "armed" with the token and API logic later.
+    await context.addInitScript(() => {
+        console.log('[Bot Script] WebSocket proxy injected. Waiting for token to be armed.');
+        const OriginalWebSocket = window.WebSocket;
+        let isProcessing = false;
+
+        Object.defineProperty(window, 'WebSocket', {
+            get() {
+                return new Proxy(OriginalWebSocket, {
+                    construct(target, args) {
+                        const ws = new target(...args);
+                        ws.addEventListener('message', (event) => {
+                            if (isProcessing) return;
+                            try {
+                                const data = JSON.parse(event.data);
+                                if (data.type === "ChannelCreate" && data.server === "01JDKZ9Y7AEPQQDA7BVQA10DZ7") {
+                                    console.log('[Bot Script] MATCH! ChannelCreate event detected.');
+                                    
+                                    // Check if the bot has been "armed" with the API function
+                                    if (typeof window.sendApiMessage !== 'undefined') {
+                                        isProcessing = true;
+                                        console.log('[Bot Script] Bot is armed. Executing API call...');
+                                        window.sendApiMessage(data._id, data.name);
+                                        setTimeout(() => isProcessing = false, 5000); // Shorter timeout, we're faster now
+                                    } else {
+                                        console.warn('[Bot Script] Bot is NOT armed yet. Missing token or API function. Ignoring event.');
+                                    }
+                                }
+                            } catch (e) { /* Ignore parsing errors */ }
+                        });
+                        return ws;
+                    }
+                });
+            },
+            set() {
+                console.warn('[Bot Script] Attempt to overwrite window.WebSocket was blocked.');
+            }
+        });
+    });
+    
+    // --- Part 3: Log in and fetch the token (same as before) ---
+    await page.goto('https://revolt.onech.at');
+    
+    console.log("Please log in to your account now.");
+    console.log("Once you are successfully logged in and can see the app, press ENTER in this terminal to ACTIVATE the bot.");
+    
+    await new Promise(resolve => process.stdin.once('data', resolve));
+    
+    console.log("✅ Login confirmed. Fetching authentication token from IndexedDB...");
+
+    const authToken = await page.evaluate(() => {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('localforage');
+            request.onsuccess = () => {
+                const db = request.result;
+                const tx = db.transaction(['keyvaluepairs'], 'readonly');
+                const store = tx.objectStore('keyvaluepairs');
+                const getAllRequest = store.getAll();
+                getAllRequest.onsuccess = () => {
+                    const allValues = getAllRequest.result;
+                    let foundToken = null;
+                    for (const value of allValues) {
+                        if (value && value.sessions) {
+                            const sessionsObject = value.sessions;
+                            const userIdKey = Object.keys(sessionsObject)[0];
+                            if (userIdKey && sessionsObject[userIdKey] && sessionsObject[userIdKey].session) {
+                                foundToken = sessionsObject[userIdKey].session.token;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundToken) {
+                        resolve(foundToken);
+                    } else {
+                        reject(new Error('Could not find session token within any of the values in IndexedDB.'));
+                    }
+                };
+                getAllRequest.onerror = () => reject(getAllRequest.error);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    });
+
+    if (!authToken) {
+        console.error("❌ Could not find token. The bot will not work.");
+        return;
+    }
+    console.log(`✅ Successfully fetched token!`);
+
+    // --- Part 4: ARM THE BOT! Inject the token and the API function into the browser ---
+    console.log("🚀 Arming the bot with the token and API logic...");
+    await page.evaluate((token) => {
+        // 1. Store the token on the window object
+        window.authToken = token;
+
+        // 2. Define the function that will be called by the WebSocket listener
+        window.sendApiMessage = async (channelId, channelName) => {
+            console.log(`🎯 [In-Browser] New ticket channel detected: ${channelName} (${channelId})!`);
+            
+            const ticketNumberMatch = channelName.match(/\d+/);
+            const messageToSend = ticketNumberMatch ? ticketNumberMatch[0] : channelName;
+            console.log(`[In-Browser] Extracted ticket number: ${messageToSend}`);
+
+            const apiChannelUrl = `https://revolt-api.onech.at/channels/${channelId}/messages`;
+            console.log(`[In-Browser] 🚀 Sending message via API to ${channelName}...`);
+
+            try {
+                const res = await fetch(apiChannelUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-session-token': window.authToken, // Use the token from the window object
+                    },
+                    body: JSON.stringify({
+                        content: messageToSend,
+                    }),
+                });
+
+                if (res.ok) {
+                    console.log(`[In-Browser] ✅ SUCCESS! Sent '${messageToSend}' to ${channelName}. Status: ${res.status}`);
+                } else {
+                    console.error(`[In-Browser] ❌ FAILED to send message. Status: ${res.status}. Error: ${await res.text()}`);
+                }
+            } catch (error) {
+                console.error(`[In-Browser] ❌ An unexpected error occurred during the API call: ${error.message}`);
+            }
+        };
+        console.log("[Bot Script] Bot is now ARMED and READY.");
+    }, authToken); // Pass the token into the browser context
+
+    console.log("🎉 Bot is now running with full logging.");
+    console.log("Watch the terminal for detailed [BROWSER] messages when a new ticket is created.");
+    
+    // Keep the script running
+    process.stdin.resume();
+})();
